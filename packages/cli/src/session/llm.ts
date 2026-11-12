@@ -6,7 +6,16 @@ import { openCodeGoSessionHeaders } from "@/provider/opencode-go"
 import { Log } from "@/util"
 import { Context, Duration, Effect, Layer, Record, Cause } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool, tool, jsonSchema, NoSuchToolError } from "ai"
+import {
+  APICallError,
+  streamText,
+  wrapLanguageModel,
+  type ModelMessage,
+  type Tool,
+  tool,
+  jsonSchema,
+  NoSuchToolError,
+} from "ai"
 import { mergeDeep, pipe } from "remeda"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider"
@@ -699,14 +708,19 @@ const live: Layer.Layer<
         && execution?.sessionID === input.sessionID && execution.userMessageID === input.user.id
         ? { executionAttempt: execution.attempt, directory: execution.directory } : {}
       const result = streamText({
-        onError(error) {
+        onError({ error }) {
           l.debug("streamText error", {
             messageID: input.user.id,
             error: error instanceof Error ? error.message : String(error),
             elapsedMs: Date.now() - streamStartTs,
           })
+          // Never hand the raw error to the logger: APICallError carries
+          // requestBodyValues, i.e. the full system prompt, conversation and tools.
           l.error("stream error", {
-            error,
+            error: error instanceof Error ? error : String(error),
+            ...(APICallError.isInstance(error)
+              ? { statusCode: error.statusCode, url: error.url, responseBody: error.responseBody?.slice(0, 1024) }
+              : {}),
           })
         },
         async experimental_repairToolCall(failed) {
